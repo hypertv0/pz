@@ -2,10 +2,9 @@ name: Otomatik Yayın Güncelleyici
 
 on:
   schedule:
-    - cron: '0 */3 * * *'
+    - cron: '0 * * * *'
   workflow_dispatch:
 
-# İŞTE BURASI: Bota dosyaları pushlaması için yazma yetkisi veriyoruz
 permissions:
   contents: write
 
@@ -25,8 +24,7 @@ jobs:
       - name: Gerekli Kütüphaneleri Yükle
         run: |
           python -m pip install --upgrade pip
-          pip install playwright
-          python -m playwright install chromium
+          pip install curl_cffi
 
       - name: Botu Çalıştır (Linkleri Güncelle)
         run: python main.py
