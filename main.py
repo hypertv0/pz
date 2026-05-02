@@ -7,58 +7,56 @@ from playwright.sync_api import sync_playwright
 # --- Ayarlar ---
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
-def find_working_domain(context):
-    print("\n🔍 PapazSports güncel adresi hızlı tarama ile aranıyor...", flush=True)
+def find_working_domain(page):
+    print("\n🔍 PapazSports güncel adresi aranıyor (Tarayıcı Modu)...", flush=True)
     
-    # 1. Aşama: Hızlı HTTP sinyalleri ile hangi domainin ayakta olduğunu bul (Tarayıcı açmaz)
-    active_url = None
-    for num in range(1015, 999, -1):
+    # 1010'dan geriye doğru tarıyoruz (1005'i hızlı bulması için)
+    for num in range(1010, 999, -1):
         test_url = f"https://www.papazsports{num}.pro/"
-        print(f"Deneyiyor: {test_url:<35}", end="\r", flush=True)
+        print(f"Deneniyor: {test_url:<35}", end=" ", flush=True)
+        
         try:
-            # Sadece header çekiyoruz, sayfa yüklemiyoruz (çok hızlıdır)
-            with context.request.get(test_url, timeout=3000) as response:
-                # Cloudflare 403/503 verse bile bu domain "yaşıyor" demektir
-                if response.status in [200, 403, 503]:
-                    active_url = test_url
-                    print(f"\n✅ Sinyal Alındı: {active_url} (Durum: {response.status})", flush=True)
-                    break
+            # wait_until='commit' çok daha hızlıdır, sayfanın sadece yanıt vermesi yeterli
+            response = page.goto(test_url, timeout=12000, wait_until='domcontentloaded')
+            
+            # Sayfa içeriğinde veya başlığında PapazSports kontrolü
+            page.wait_for_timeout(2000)
+            title = page.title().lower()
+            
+            if "papaz" in title or "spor" in title:
+                # Cloudflare kontrolü
+                if "just a moment" not in title and "waiting" not in title:
+                    final_url = page.url.rstrip('/')
+                    print(f"✅ BULUNDU: {final_url}", flush=True)
+                    return final_url
+                else:
+                    print("⏳ CF Bekleniyor...", flush=True)
+                    page.wait_for_timeout(5000)
+                    if "papaz" in page.title().lower():
+                        return page.url.rstrip('/')
+            else:
+                print("❌", flush=True)
         except:
+            print("🚫", flush=True)
             continue
-
-    if not active_url:
-        return None, None
-
-    # 2. Aşama: Sadece bulduğumuz adreste tarayıcıyı açıyoruz
-    page = context.new_page()
-    try:
-        print(f"🚀 Tarayıcı {active_url} adresine giriş yapıyor...", flush=True)
-        page.goto(active_url, timeout=30000, wait_until='domcontentloaded')
-        
-        # Cloudflare/Yönlendirme için bekleme
-        page.wait_for_timeout(6000)
-        
-        final_url = page.url.rstrip('/')
-        title = page.title().lower()
-        
-        if "papazsports" in title or "maç izle" in title:
-            print(f"🎯 Giriş Başarılı: {final_url}", flush=True)
-            return final_url, page
-        else:
-            print(f"⚠️ Sayfa başlığı hatalı: {title}", flush=True)
-    except Exception as e:
-        print(f"⚠️ Tarayıcı hatası: {str(e)}", flush=True)
-    
-    return None, None
+            
+    return None
 
 def main():
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=['--disable-blink-features=AutomationControlled'])
+        # Cloudflare'i aşmak için en önemli tarayıcı ayarları
+        browser = p.chromium.launch(headless=True, args=[
+            '--disable-blink-features=AutomationControlled',
+            '--no-sandbox'
+        ])
         context = browser.new_context(user_agent=USER_AGENT)
+        page = context.new_page()
 
-        domain, page = find_working_domain(context)
+        domain = find_working_domain(page)
+        
         if not domain:
-            print("\n❌ Çalışan ana domain bulunamadı.", flush=True)
+            print("\n❌ Çalışan ana domain bulunamadı. Lütfen numaraları kontrol et.", flush=True)
+            browser.close()
             return
 
         vip_channels = {
@@ -75,24 +73,23 @@ def main():
         os.makedirs(output_dir, exist_ok=True)
         global_playlist = ["#EXTM3U"]
 
-        print("\n🚀 API kanalları çekiliyor...", flush=True)
+        print(f"\n🚀 {domain} üzerinden yayınlar çekiliyor...", flush=True)
 
         for channel_id, name in vip_channels.items():
-            print(f"📡 {name:<15}", end=" ", flush=True)
+            print(f"📡 {name:<18}", end=" ", flush=True)
             try:
-                # Sitenin içindeki fetch mekanizmasını kullanıyoruz
+                # Sitenin içinden (JS evaluate) auth.php çağrısı yapıyoruz
+                # Detaylı loglama eklendi
                 fetch_script = f"""
                 async () => {{
                     try {{
-                        let response = await fetch('/auth.php', {{
+                        let res = await fetch('/auth.php', {{
                             method: 'POST',
-                            headers: {{ 
-                                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                                'X-Requested-With': 'XMLHttpRequest'
-                            }},
+                            headers: {{ 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest' }},
                             body: 'channel={channel_id}'
                         }});
-                        return await response.text();
+                        let text = await res.text();
+                        return text;
                     }} catch (e) {{ return "ERROR:" + e.message; }}
                 }}
                 """
@@ -104,29 +101,29 @@ def main():
                     stream_url = data["URL"]
                     token = data["TOKEN"]
                     
-                    # Oynatıcı başlıkları (Pipe formatı)
+                    # Oynatıcı parametreleri (Header Pipe)
                     final_link = f"{stream_url}|usertoken={token}&pl=PapazSports&Origin={domain}&Referer={domain}/"
                     
-                    content = ["#EXTM3U", f'#EXTINF:-1, {name}', final_link]
+                    content = ["#EXTM3U", f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}', final_link]
                     clean_name = name.replace(" ", "_").replace(".", "").replace("-", "_")
                     
                     with open(os.path.join(output_dir, f"{clean_name}.m3u8"), "w", encoding="utf-8") as f:
                         f.write("\n".join(content))
 
-                    global_playlist.append(f'#EXTINF:-1, {name}')
+                    global_playlist.append(f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}')
                     global_playlist.append(final_link)
-                    print("✅", flush=True)
+                    print(f"✅ (Token: {token[:6]}...)", flush=True)
                 else:
-                    print("❌ (Link Yok)", flush=True)
-            except:
-                print("⚠️ Hata", flush=True)
+                    print(f"❌ Yanıt: {raw_response[:30]}", flush=True)
+            except Exception as e:
+                print(f"⚠️ Hata: {str(e)[:30]}", flush=True)
 
-        # Playlist Kaydet
+        # Playlist'i kaydet
         with open("playlist.m3u", "w", encoding="utf-8") as f:
             f.write("\n".join(global_playlist))
 
         browser.close()
-        print("\n🎉 İşlem başarıyla tamamlandı. Dosyalar güncel.")
+        print("\n🎉 İşlem bitti. Dosyalar ExoPlayer / IPTV için hazır.", flush=True)
 
 if __name__ == "__main__":
     main()
