@@ -1,52 +1,73 @@
 import os
 import re
+import time
 from curl_cffi import requests
 
 def get_working_domain(session):
-    print("\n🔍 PapazSports güncel adresi aranıyor (Cloudflare Atlatma Modu)...", flush=True)
+    print("\n🔍 PapazSports güncel adresi aranıyor (Agresif Mod)...", flush=True)
     
-    # Öncelikle 1000 numaralı ana yönlendiriciyi test edelim.
-    try:
-        print("Deneyiyor: https://www.papazsports1000.pro/", flush=True)
-        # allow_redirects=True sayesinde 1000'den 1005'e giden o yönlendirmeyi takip eder
-        res = session.get("https://www.papazsports1000.pro/", allow_redirects=True, timeout=10)
-        
-        # Eğer Cloudflare korumasını (curl_cffi sayesinde) aşarsak sayfa kaynağı gelir
-        if res.status_code == 200 and "papazsports" in res.text.lower() and "just a moment" not in res.text.lower():
-            final_url = res.url.rstrip('/')
-            print(f"🎯 Yönlendirme Başarılı! Güncel Adres: {final_url}", flush=True)
-            return final_url
-    except:
-        pass
+    # 1005'ten başlayıp geriye ve ileriye doğru tarayalım
+    check_list = [1005, 1006, 1004, 1007, 1003, 1008, 1002, 1009, 1001, 1010, 1000]
+    for num in range(1011, 1025): check_list.append(num)
 
-    # Eğer 1000 çalışmazsa yedek tarama (Geriye doğru tarayarak en günceli bulur)
-    for num in range(1030, 999, -1):
+    for num in check_list:
         test_url = f"https://www.papazsports{num}.pro"
-        print(f"Deneyiyor: {test_url:<35}", end="\r", flush=True)
+        # Canlı log: Her denemeyi anında görelim
+        print(f"Deneyiyor: {test_url:<35}", end=" ", flush=True)
+        
         try:
-            res = session.get(test_url, timeout=5)
-            if res.status_code == 200 and "papazsports" in res.text.lower() and "just a moment" not in res.text.lower():
-                print(f"\n🎯 Güncel Adres Tespit Edildi: {test_url}", flush=True)
-                return test_url
-        except Exception:
-            pass
+            # Cloudflare'i kandırmak için sanki Google Aramadan gelmişiz gibi davranıyoruz
+            res = session.get(
+                test_url, 
+                timeout=8, 
+                allow_redirects=True,
+                headers={"Referer": "https://www.google.com/search?q=papazsports"}
+            )
+            
+            status = res.status_code
+            body = res.text.lower()
+            
+            # Başarılı giriş veya Cloudflare meydan okuması (503/403) fark etmez, 
+            # domain yaşıyorsa içine bakıyoruz
+            if status in [200, 503, 403]:
+                # Eğer sayfa içinde papazsports geçiyorsa veya 1000.pro bizi bir yere attıysa
+                if "papazsports" in body or "papazsports" in res.url:
+                    final_url = res.url.rstrip('/')
+                    print(f"✅ [Kod: {status}] -> {final_url}", flush=True)
+                    return final_url
+                else:
+                    print(f"⚠️ [Kod: {status}] (PapazSports değil)", flush=True)
+            else:
+                print(f"❌ [Kod: {status}]", flush=True)
+                
+        except Exception as e:
+            print(f"🚫 (Erişim Yok)", flush=True)
             
     return None
 
 def main():
-    # En Kritik Kısım: impersonate="chrome116"
-    # Bu ayar, Python'un bir bot olduğunu gizler ve Cloudflare'e %100 gerçek bir Chrome tarayıcısı gibi görünür.
-    session = requests.Session(impersonate="chrome116")
+    # Chrome 120 parmak izi ile başla
+    session = requests.Session(impersonate="chrome120")
     
+    # Headerları logdaki gibi birebir taklit et
+    session.headers.update({
+        "Accept": "*/*",
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8",
+        "X-Requested-With": "XMLHttpRequest",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Dest": "empty"
+    })
+
     domain = get_working_domain(session)
     if not domain:
-        print("\n❌ Çalışan ana domain bulunamadı veya CF aşılamadı.", flush=True)
+        print("\n❌ Maalesef hiçbir güncel domain bulunamadı veya tüm IP'ler bloklu.", flush=True)
         return
         
-    # Ağ trafiğinde gördüğümüz, sitenin "reklamları geçtim" cookie'si
-    domain_clean = domain.replace("https://", "").replace("http://", "")
+    domain_clean = domain.replace("https://", "").replace("www.", "")
     session.cookies.set("puShown", "1", domain=domain_clean)
 
+    # Kanallar (Senin gönderdiğin HTML'den birebir çekildi)
     vip_channels = {
         "100001": ("beIN 1", "BeinSports1.tr"),
         "100002": ("beIN 2", "BeinSports2.tr"),
@@ -70,88 +91,67 @@ def main():
         "100057": ("EUROSPORT 2", "Eurosport2.tr")
     }
 
-    direct_channels = {
-        "TRT_1": ("TRT 1", "TRT1.tr", "https://tv-trt1.medya.trt.com.tr/master.m3u8"),
-        "TRT_2": ("TRT 2", "TRT2.tr", "https://tv-trt2.medya.trt.com.tr/master.m3u8"),
-        "TRT_SPOR": ("TRT Spor", "TRTSpor.tr", "https://tv-trtspor1.medya.trt.com.tr/master.m3u8"),
-        "TRT_YILDIZ": ("TRT Yıldız", "TRTSporYildiz.tr", "https://tv-trtspor2.medya.trt.com.tr/master.m3u8")
-    }
-
     output_dir = "kanallar"
     os.makedirs(output_dir, exist_ok=True)
     global_playlist = ["#EXTM3U"]
 
-    print("\n⏳ Cloudflare aşıldı! Doğrudan API'den veriler çekiliyor...", flush=True)
+    print("\n⏳ Linkler toplanıyor (Anlık)...", flush=True)
 
     for channel_id, (name, tvg_id) in vip_channels.items():
-        print(f"📡 Çekiliyor: {name:<20} (ID: {channel_id})...", end=" ", flush=True)
+        print(f"📡 Çekiliyor: {name:<20}", end=" ", flush=True)
         try:
-            # Doğrudan arka plan dosyasına kanal id'sini POST ediyoruz
-            res = session.post(
+            # POST isteği ile auth.php'den token alıyoruz
+            # Referer ve Origin çok önemli
+            auth_res = session.post(
                 f"{domain}/auth.php",
                 data={"channel": channel_id},
                 headers={
-                    "X-Requested-With": "XMLHttpRequest",
                     "Origin": domain,
-                    "Referer": f"{domain}/",
-                    "Accept": "application/json, text/javascript, */*; q=0.01"
+                    "Referer": f"{domain}/"
                 },
-                timeout=10
+                timeout=12
             )
             
-            if res.status_code == 200:
+            if auth_res.status_code == 200:
                 try:
-                    data = res.json()
+                    data = auth_res.json()
+                    stream_url = data.get("URL")
+                    token = data.get("TOKEN")
+                    
+                    if stream_url and token:
+                        # IPTV oynatıcıları için Header Pipe formatı
+                        final_url = f"{stream_url}|usertoken={token}&pl=PapazSports&Referer={domain}/"
+
+                        content = [
+                            "#EXTM3U",
+                            f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}',
+                            final_url
+                        ]
+                        
+                        clean_name = re.sub(r'[\\/*?:"<>|]', "", name).replace(" ", "_")
+                        with open(os.path.join(output_dir, f"{clean_name}.m3u8"), "w", encoding="utf-8") as f:
+                            f.write("\n".join(content))
+
+                        global_playlist.extend(content[1:])
+                        print(f"✅ [Token: {token[:8]}...]", flush=True)
+                    else:
+                        print("❌ [JSON Boş]", flush=True)
                 except:
-                    print("❌ Gelen yanıt JSON değil (Cloudflare blokladı)", flush=True)
-                    continue
-                    
-                if "URL" in data and "TOKEN" in data:
-                    stream_url = data["URL"]
-                    token = data["TOKEN"]
-                    
-                    # Tivimate, ExoPlayer vb. sistemlere "Ben bu sitenin oynatıcısıyım" dedirtmek için başlıklar
-                    pipe_headers = f"usertoken={token}&pl=PapazSports&Origin={domain}&Referer={domain}/"
-                    final_url = f"{stream_url}|{pipe_headers}"
-
-                    content =[
-                        "#EXTM3U",
-                        f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}',
-                        final_url
-                    ]
-                    
-                    clean_name = re.sub(r'[\\/*?:"<>|]', "", name).replace(" ", "_")
-                    with open(os.path.join(output_dir, f"{clean_name}.m3u8"), "w", encoding="utf-8") as f:
-                        f.write("\n".join(content))
-
-                    global_playlist.extend(content[1:])
-                    print("✅ Bulundu", flush=True)
-                else:
-                    print("❌ JSON eksik/boş", flush=True)
-            elif res.status_code == 403:
-                print("❌ Cloudflare Engeli (403)", flush=True)
+                    print(f"❌ [Bot Koruması - JSON Alınamadı]", flush=True)
             else:
-                print(f"❌ Sunucu Hatası ({res.status_code})", flush=True)
+                print(f"❌ [Hata: {auth_res.status_code}]", flush=True)
                 
-        except Exception as e:
-            print(f"⚠️ Hata: Bağlantı koptu", flush=True)
+            # Sunucuyu yormamak ve yakalanmamak için minik bir bekleme
+            time.sleep(0.5)
+            
+        except Exception:
+            print("⚠️ [Zaman Aşımı]", flush=True)
 
-    for key, (name, tvg_id, url) in direct_channels.items():
-        print(f"📡 Ekleniyor: {name:<20} (Şifresiz)... ✅", flush=True)
-        content =[
-            "#EXTM3U",
-            f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}',
-            url
-        ]
-        clean_name = re.sub(r'[\\/*?:"<>|]', "", name).replace(" ", "_")
-        with open(os.path.join(output_dir, f"{clean_name}.m3u8"), "w", encoding="utf-8") as f:
-            f.write("\n".join(content))
-        global_playlist.extend(content[1:])
-
+    # Playlist'i kaydet
     with open("playlist.m3u", "w", encoding="utf-8") as f:
         f.write("\n".join(global_playlist))
 
-    print("\n🎉 İşlem bitti! Tüm yayınlar Cloudflare radarına takılmadan güvenle çekildi.", flush=True)
+    print("\n🎉 İşlem tamamlandı. Dosyalar güncellendi.", flush=True)
 
 if __name__ == "__main__":
     main()
