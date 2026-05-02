@@ -4,36 +4,48 @@ import os
 from playwright.sync_api import sync_playwright
 
 # --- Ayarlar ---
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
 
 def find_working_domain(context):
-    print("\n🔍 Çalışan PapazSports domaini aranıyor...")
-    for num in range(1000, 1030):
+    print("\n🔍 Çalışan PapazSports domaini aranıyor...", flush=True)
+    
+    # 1. Hızlı Tarama: Sayfa yüklemeden sadece ağ isteği (ping) atarak sitenin ayakta olup olmadığını kontrol eder
+    for num in range(1000, 1035):
         test_url = f"https://www.papazsports{num}.pro/"
-        page = context.new_page()
+        print(f"Deneyiyor (Hızlı Tarama): {test_url:<35}", end="\r", flush=True)
+        
         try:
-            # Satırın üzerine yazarak temiz bir görünüm sağlar
-            print(f"Deneyiyor: {test_url:<35}", end="\r")
+            # Sadece HTTP Header isteği atıyoruz. (Çok hızlıdır, kapalı sitelerde anında hata verir)
+            response = context.request.get(test_url, timeout=3000)
             
-            # Timeout süresini 15 saniyeye çıkardık (Cloudflare bazen geç yanıt verir)
-            page.goto(test_url, timeout=15000, wait_until='domcontentloaded')
-            
-            # Cloudflare'in kendi doğrulamasını yapabilmesi için ekstra 3 saniye süre tanıyoruz
-            page.wait_for_timeout(3000)
-            
-            title = page.title().lower()
-            
-            # response.ok yerine direkt sitenin başlığını kontrol ediyoruz
-            # Çünkü Cloudflare başlarda 403 hatası atıp kodu yanıltabiliyor.
-            if "papazsports" in title and not any(x in title for x in ["cloudflare", "just a moment", "bekleyin", "attention"]):
-                print(f"\n✅ Bulundu: {test_url}")
+            # Eğer 200 (OK), 403 (Cloudflare) veya 503 gibi bir sunucu yanıtı geldiyse, domain aktiftir!
+            if response.status in [200, 403, 503]:
+                print(f"\n✅ Sunucu yanıt verdi: {test_url} - Şimdi tarayıcıda açılıyor...", flush=True)
+                
+                page = context.new_page()
+                # Gönderdiğin logdaki puShown=1 cookie'sini atayarak popup/reklamları engelliyoruz
+                context.add_cookies([{"name": "puShown", "value": "1", "url": test_url}])
+                
+                try:
+                    # Gerçek tarayıcı navigasyonu
+                    page.goto(test_url, timeout=20000, wait_until='domcontentloaded')
+                except Exception as e:
+                    print(f"⚠️ Sayfa tam yüklenemedi ancak işleme devam ediliyor...", flush=True)
+                
+                # Cloudflare'in 5 saniyelik JS testini geçmesi için bekliyoruz
+                page.wait_for_timeout(4000)
+                
+                title = page.title().lower()
+                if "cloudflare" in title or "just a moment" in title or "bekleyin" in title:
+                    print("⏳ Cloudflare koruması saptandı, tam olarak geçilmesi bekleniyor...", flush=True)
+                    page.wait_for_timeout(6000)
+                    
                 return test_url, page
                 
-        except Exception as e:
+        except Exception:
+            # Sunucuya ulaşılamadı (DNS hatası, kapalı site vs.), hemen sonrakine geç
             pass
             
-        page.close()
-        
     return None, None
 
 def main():
@@ -49,13 +61,13 @@ def main():
 
         domain, page = find_working_domain(context)
         if not domain:
-            print("\n❌ Çalışan ana domain bulunamadı.")
+            print("\n❌ Çalışan ana domain bulunamadı.", flush=True)
             return
 
-        print("⏳ Arka plan işlemleri için site hazırlanıyor...")
+        print("⏳ Arka plan işlemleri için site Javascript motoru hazırlanıyor...", flush=True)
         page.wait_for_timeout(2000)
 
-        # VIP Kanallar (auth.php gerektirenler)
+        # VIP Kanallar (Sitenin auth.php API'sinden çekilecek olanlar)
         vip_channels = {
             "100001": ("beIN 1", "BeinSports1.tr"),
             "100002": ("beIN 2", "BeinSports2.tr"),
@@ -79,7 +91,7 @@ def main():
             "100057": ("EUROSPORT 2", "Eurosport2.tr")
         }
 
-        # Direkt Kanallar (Şifresiz TRT yayınları)
+        # Direkt Kanallar (Şifresiz resmi yayınlar)
         direct_channels = {
             "TRT_1": ("TRT 1", "TRT1.tr", "https://tv-trt1.medya.trt.com.tr/master.m3u8"),
             "TRT_2": ("TRT 2", "TRT2.tr", "https://tv-trt2.medya.trt.com.tr/master.m3u8"),
@@ -91,11 +103,11 @@ def main():
         os.makedirs(output_dir, exist_ok=True)
         global_playlist = ["#EXTM3U"]
 
-        # 1. VIP Kanalları Çek
+        # 1. VIP Kanalları Sitenin Kendi İçinden Çek
         for channel_id, (name, tvg_id) in vip_channels.items():
-            print(f"📡 Çekiliyor: {name} (ID: {channel_id})...", end=" ")
+            print(f"📡 Çekiliyor: {name:<20} (ID: {channel_id})...", end=" ", flush=True)
             try:
-                # Sitenin auth.php API'sine direkt sızıp kanalın m3u8(js) bilgisini çekiyoruz
+                # Javascript kodunu tarayıcıya yollayıp auth.php'ye POST atıyoruz
                 js_fetch_code = f"""
                 async () => {{
                     try {{
@@ -120,7 +132,7 @@ def main():
                     stream_url = data["URL"]
                     token = data["TOKEN"]
                     
-                    # ExoPlayer, Tivimate vb. programlar için Header(Başlık) atama formatı
+                    # Ağ trafiği analizinde gördüğümüz, oynatıcının ihtiyaç duyduğu başlıklar
                     pipe_headers = f"usertoken={token}&pl=PapazSports&Referer={domain}"
                     final_url = f"{stream_url}|{pipe_headers}"
 
@@ -139,15 +151,15 @@ def main():
 
                     # Genel Listeye Ekle
                     global_playlist.extend(content[1:])
-                    print("✅")
+                    print("✅ Bulundu", flush=True)
                 else:
-                    print("❌ (Sunucu yanıt vermedi)")
+                    print("❌ (Sunucu reddetti / Yanıt vermedi)", flush=True)
             except Exception as e:
-                print(f"⚠️ Hata: {str(e)}")
+                print(f"⚠️ Hata oluştu", flush=True)
 
-        # 2. Direkt Kanalları Ekle (TRT vb.)
+        # 2. Şifresiz Kanalları Ekle
         for key, (name, tvg_id, url) in direct_channels.items():
-            print(f"📡 Ekleniyor: {name} (Şifresiz)... ✅")
+            print(f"📡 Ekleniyor: {name:<20} (Şifresiz)... ✅", flush=True)
             content =[
                 "#EXTM3U",
                 f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}',
@@ -159,12 +171,12 @@ def main():
                 f.write("\n".join(content))
             global_playlist.extend(content[1:])
 
-        # Tüm listeyi kaydet
+        # Tüm m3u dosyasını kaydet
         with open("playlist.m3u", "w", encoding="utf-8") as f:
             f.write("\n".join(global_playlist))
 
         browser.close()
-        print("\n🎉 İşlem bitti! Yeni sistem başarıyla şifreli başlıklarla ExoPlayer uyumlu hale getirildi.")
+        print("\n🎉 İşlem bitti! Canlı maçlar ExoPlayer ve Tivimate için m3u formatına döküldü.", flush=True)
 
 if __name__ == "__main__":
     main()
