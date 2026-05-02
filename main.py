@@ -8,22 +8,32 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 
 def find_working_domain(context):
     print("\n🔍 Çalışan PapazSports domaini aranıyor...")
-    # Sitenin güncel domain numaralarını tarar
-    for num in range(1000, 1025):
+    for num in range(1000, 1030):
         test_url = f"https://www.papazsports{num}.pro/"
         page = context.new_page()
         try:
-            print(f"Deneyiyor: {test_url}", end="\r")
-            response = page.goto(test_url, timeout=8000, wait_until='domcontentloaded')
-            if response and response.ok:
-                # Cloudflare kontrolü
-                if not any(x in page.title().lower() for x in["cloudflare", "just a moment", "bekleyin"]):
-                    print(f"\n✅ Bulundu: {test_url}")
-                    # Doğrulama (auth.php) isteklerini yapabilmek için sayfayı açık bırakıyoruz
-                    return test_url, page
-        except:
+            # Satırın üzerine yazarak temiz bir görünüm sağlar
+            print(f"Deneyiyor: {test_url:<35}", end="\r")
+            
+            # Timeout süresini 15 saniyeye çıkardık (Cloudflare bazen geç yanıt verir)
+            page.goto(test_url, timeout=15000, wait_until='domcontentloaded')
+            
+            # Cloudflare'in kendi doğrulamasını yapabilmesi için ekstra 3 saniye süre tanıyoruz
+            page.wait_for_timeout(3000)
+            
+            title = page.title().lower()
+            
+            # response.ok yerine direkt sitenin başlığını kontrol ediyoruz
+            # Çünkü Cloudflare başlarda 403 hatası atıp kodu yanıltabiliyor.
+            if "papazsports" in title and not any(x in title for x in ["cloudflare", "just a moment", "bekleyin", "attention"]):
+                print(f"\n✅ Bulundu: {test_url}")
+                return test_url, page
+                
+        except Exception as e:
             pass
+            
         page.close()
+        
     return None, None
 
 def main():
@@ -42,10 +52,10 @@ def main():
             print("\n❌ Çalışan ana domain bulunamadı.")
             return
 
-        print("⏳ Sitenin güvenlik doğrulaması (Cloudflare) geçiliyor...")
-        page.wait_for_timeout(3000)
+        print("⏳ Arka plan işlemleri için site hazırlanıyor...")
+        page.wait_for_timeout(2000)
 
-        # VIP Kanallar (auth.php gerektirenler - HTML'den alınmıştır)
+        # VIP Kanallar (auth.php gerektirenler)
         vip_channels = {
             "100001": ("beIN 1", "BeinSports1.tr"),
             "100002": ("beIN 2", "BeinSports2.tr"),
@@ -111,7 +121,6 @@ def main():
                     token = data["TOKEN"]
                     
                     # ExoPlayer, Tivimate vb. programlar için Header(Başlık) atama formatı
-                    # |usertoken=...&pl=... şeklinde URL sonuna eklenir
                     pipe_headers = f"usertoken={token}&pl=PapazSports&Referer={domain}"
                     final_url = f"{stream_url}|{pipe_headers}"
 
