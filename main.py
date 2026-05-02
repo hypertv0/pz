@@ -7,48 +7,32 @@ from playwright.sync_api import sync_playwright
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
 
 def find_working_domain(context):
-    print("\n🔍 Çalışan PapazSports domaini aranıyor...", flush=True)
+    print("\n🔍 PapazSports yönlendiricileri test ediliyor...", flush=True)
     
-    # 1. Hızlı Tarama: Eski yönlendiricilere (1000 vb.) takılmamak için TERS YÖNDE (1025 -> 1000) tarıyoruz!
-    for num in range(1025, 999, -1):
-        test_url = f"https://www.papazsports{num}.pro/"
-        print(f"Deneyiyor (Hızlı Tarama): {test_url:<35}", end="\r", flush=True)
-        
-        try:
-            response = context.request.get(test_url, timeout=3000)
+    # 1000 ana yönlendiricidir. Buraya ağ isteği atarsak otomatik olarak güncel adrese (örn 1005) yönlenir.
+    test_urls =["https://www.papazsports1000.pro/", "https://www.papazsports1005.pro/"]
+    
+    # Yedek olarak 1001-1020 arasını da ekleyelim.
+    for num in range(1001, 1020):
+        if num != 1005:
+            test_urls.append(f"https://www.papazsports{num}.pro/")
             
-            if response.status in[200, 403, 503]:
-                print(f"\n✅ Sunucu yanıt verdi: {test_url} - Şimdi tarayıcıda açılıyor...", flush=True)
-                
-                page = context.new_page()
-                context.add_cookies([{"name": "puShown", "value": "1", "url": test_url}])
-                
-                try:
-                    page.goto(test_url, timeout=20000, wait_until='domcontentloaded')
-                except Exception as e:
-                    print(f"⚠️ Sayfa tam yüklenemedi ancak işleme devam ediliyor...", flush=True)
-                
-                page.wait_for_timeout(4000)
-                
-                title = page.title().lower()
-                if "cloudflare" in title or "just a moment" in title or "bekleyin" in title:
-                    print("⏳ Cloudflare koruması saptandı, tam olarak geçilmesi bekleniyor...", flush=True)
-                    page.wait_for_timeout(8000)
-                    title = page.title().lower()
-                
-                if "papazsports" in title and not any(x in title for x in["cloudflare", "just a moment"]):
-                    # Yönlendirme (Redirect) yapılmışsa GÜNCEL linki adres çubuğundan al!
-                    final_url = page.url.rstrip('/')
-                    print(f"🎯 Gerçek Güncel Adres Tespit Edildi: {final_url}", flush=True)
-                    return final_url, page
-                else:
-                    print("⚠️ Bu adres sadece bir yönlendirici veya kapalı, atlanıyor...", flush=True)
-                    page.close()
-                
+    for test_url in test_urls:
+        print(f"Deneyiyor: {test_url:<35}", end="\r", flush=True)
+        try:
+            # Sadece HTTP sinyali atıyoruz (Browser açmıyoruz, böylece Cloudflare tuzağına düşmeyiz)
+            res = context.request.get(test_url, timeout=5000)
+            
+            # Eğer CF engellese bile (403), yönlendirme (301) tamamlanmış olur.
+            if res.status in[200, 403, 503]:
+                # res.url bize en son ulaştığı GÜNCEL adresi verir (Örn: 1005)
+                final_url = res.url.rstrip('/')
+                print(f"\n🎯 Yönlendirme Tamamlandı! Güncel Adres: {final_url}", flush=True)
+                return final_url
         except Exception:
             pass
             
-    return None, None
+    return None
 
 def main():
     with sync_playwright() as p:
@@ -61,13 +45,13 @@ def main():
             viewport={"width": 1280, "height": 720}
         )
 
-        domain, page = find_working_domain(context)
+        domain = find_working_domain(context)
         if not domain:
             print("\n❌ Çalışan ana domain bulunamadı.", flush=True)
             return
 
-        print("⏳ Arka plan işlemleri için site API'si hazırlanıyor...", flush=True)
-        page.wait_for_timeout(2000)
+        # Sitenin güvenlik gereksinimi olan cookie'yi atıyoruz (Ağ trafiğinde gördük)
+        context.add_cookies([{"name": "puShown", "value": "1", "url": domain}])
 
         vip_channels = {
             "100001": ("beIN 1", "BeinSports1.tr"),
@@ -101,70 +85,61 @@ def main():
 
         output_dir = "kanallar"
         os.makedirs(output_dir, exist_ok=True)
-        global_playlist =["#EXTM3U"]
+        global_playlist = ["#EXTM3U"]
+
+        print("\n⏳ Cloudflare Atlatma Modu Devrede: Web sayfası açılmadan direkt API vurulacak...", flush=True)
 
         for channel_id, (name, tvg_id) in vip_channels.items():
             print(f"📡 Çekiliyor: {name:<20} (ID: {channel_id})...", end=" ", flush=True)
             try:
-                js_fetch_code = """
-                async (chan_id) => {
-                    try {
-                        const formData = new URLSearchParams();
-                        formData.append('channel', chan_id);
-                        const response = await fetch('/auth.php', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                                'X-Requested-With': 'XMLHttpRequest',
-                                'Accept': '*/*'
-                            },
-                            body: formData.toString()
-                        });
-                        const text = await response.text();
-                        try {
-                            return JSON.parse(text);
-                        } catch (e) {
-                            return { error: 'Gelen Yanıt JSON değil: ' + text.substring(0, 40) };
-                        }
-                    } catch (e) {
-                        return { error: e.message };
-                    }
-                }
-                """
+                # Efsanevi Kısım: Sayfayı hiç açmıyoruz. Sitenin kendi API'sine sızıp 
+                # arka plandan XHR isteği atıyoruz. (Cloudflare bunu engellemez)
+                res = context.request.post(
+                    f"{domain}/auth.php",
+                    headers={
+                        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Accept": "application/json, text/javascript, */*; q=0.01",
+                        "Origin": domain,
+                        "Referer": f"{domain}/"
+                    },
+                    data=f"channel={channel_id}",
+                    timeout=8000
+                )
                 
-                # Parametreyi dışarıdan güvenle gönderiyoruz
-                data = page.evaluate(js_fetch_code, channel_id)
-                
-                if data and "URL" in data and "TOKEN" in data:
-                    stream_url = data["URL"]
-                    token = data["TOKEN"]
-                    
-                    # Oynatıcıların istediği başlıklar (Origin ve Referer eklendi)
-                    pipe_headers = f"usertoken={token}&pl=PapazSports&Origin={domain}&Referer={domain}/"
-                    final_url = f"{stream_url}|{pipe_headers}"
+                if res.status == 200:
+                    data = res.json()
+                    if "URL" in data and "TOKEN" in data:
+                        stream_url = data["URL"]
+                        token = data["TOKEN"]
+                        
+                        # IPTV oynatıcılarının çalışması için şifreli başlıklar ekleniyor
+                        pipe_headers = f"usertoken={token}&pl=PapazSports&Origin={domain}&Referer={domain}/"
+                        final_url = f"{stream_url}|{pipe_headers}"
 
-                    content =[
-                        "#EXTM3U",
-                        f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}',
-                        f"#EXTVLCOPT:http-user-agent={USER_AGENT}",
-                        f"#EXTVLCOPT:http-referrer={domain}/",
-                        final_url
-                    ]
+                        content =[
+                            "#EXTM3U",
+                            f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}',
+                            f"#EXTVLCOPT:http-user-agent={USER_AGENT}",
+                            f"#EXTVLCOPT:http-referrer={domain}/",
+                            final_url
+                        ]
 
-                    clean_name = re.sub(r'[\\/*?:"<>|]', "", name).replace(" ", "_")
-                    with open(os.path.join(output_dir, f"{clean_name}.m3u8"), "w", encoding="utf-8") as f:
-                        f.write("\n".join(content))
+                        clean_name = re.sub(r'[\\/*?:"<>|]', "", name).replace(" ", "_")
+                        with open(os.path.join(output_dir, f"{clean_name}.m3u8"), "w", encoding="utf-8") as f:
+                            f.write("\n".join(content))
 
-                    global_playlist.extend(content[1:])
-                    print("✅ Bulundu", flush=True)
-                    
-                elif data and "error" in data:
-                    print(f"❌ (Hata: {data['error']})", flush=True)
+                        global_playlist.extend(content[1:])
+                        print("✅ Başarılı", flush=True)
+                    else:
+                        print("❌ JSON hatalı/boş", flush=True)
+                elif res.status == 403:
+                    print("❌ Cloudflare API'yi de engelledi (403)", flush=True)
                 else:
-                    print("❌ (Geçersiz Yanıt)", flush=True)
+                    print(f"❌ Sunucu Hatası ({res.status})", flush=True)
                     
             except Exception as e:
-                print(f"⚠️ Hata oluştu", flush=True)
+                print("⚠️ Zaman aşımı", flush=True)
 
         for key, (name, tvg_id, url) in direct_channels.items():
             print(f"📡 Ekleniyor: {name:<20} (Şifresiz)... ✅", flush=True)
@@ -183,7 +158,7 @@ def main():
             f.write("\n".join(global_playlist))
 
         browser.close()
-        print("\n🎉 İşlem bitti! Canlı maçlar ExoPlayer ve Tivimate için m3u formatına döküldü.", flush=True)
+        print("\n🎉 İşlem bitti! Tüm yayınlar HTML yüklenmeden, milisaniyeler içinde çekildi.", flush=True)
 
 if __name__ == "__main__":
     main()
