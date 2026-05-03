@@ -1,99 +1,103 @@
 import re
 import os
-import json
+import time
 from playwright.sync_api import sync_playwright
 
 # --- Ayarlar ---
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+
+def find_working_domain(context):
+    # Senin loglarda çalışan BİREBİR aynı mantık. Dokunulmadı!
+    print("\n🔍 PapazSports yönlendiricileri test ediliyor...", flush=True)
+    test_urls =["https://www.papazsports1000.pro/", "https://www.papazsports1005.pro/"]
+    for num in range(1001, 1020):
+        if num != 1005:
+            test_urls.append(f"https://www.papazsports{num}.pro/")
+            
+    for test_url in test_urls:
+        print(f"Deneyiyor: {test_url:<35}", end="\r", flush=True)
+        try:
+            res = context.request.get(test_url, timeout=5000)
+            if res.status in [200, 403, 503]:
+                final_url = res.url.rstrip('/')
+                print(f"\n🎯 Yönlendirme Tamamlandı! Güncel Adres: {final_url}", flush=True)
+                return final_url
+        except Exception:
+            pass
+    return None
 
 def main():
     with sync_playwright() as p:
-        # CF atlatmak için Stealth (Gizlilik) argümanları
         browser = p.chromium.launch(
             headless=True,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-                '--disable-web-security'
-            ]
+            args=["--disable-blink-features=AutomationControlled"]
         )
         context = browser.new_context(
             user_agent=USER_AGENT,
-            viewport={"width": 1920, "height": 1080}
+            viewport={"width": 1280, "height": 720}
         )
+
+        domain = find_working_domain(context)
+        if not domain:
+            print("\n❌ Çalışan ana domain bulunamadı.", flush=True)
+            return
+
         page = context.new_page()
         
-        # Tarayıcıyı "Ben bir bot değilim" diye kandıran JS hilesi
-        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        captured_data = {}
 
-        captured_token = None
-        captured_cdn_base = None
-
-        # ARKA PLAN AĞ DİNLEYİCİSİ: Site kendi kendine auth.php'yi çağırdığında araya girip cevabı çalarız!
+        # SİTEYİ DİNLİYORUZ: Site kendi kendine auth.php isteği atarsa havada yakala
         def handle_response(response):
-            nonlocal captured_token, captured_cdn_base
             if "auth.php" in response.url and response.request.method == "POST":
                 try:
                     data = response.json()
                     if "TOKEN" in data and "URL" in data:
-                        captured_token = data["TOKEN"]
-                        # URL'yi parçala (Örn: https://cdn.../100001.js kısmındaki 100001.js'yi at)
-                        captured_cdn_base = data["URL"].rsplit('/', 1)[0]
+                        captured_data["token"] = data["TOKEN"]
+                        # https://cdn.../17777.../100001.js kısmından 100001.js'yi atıyoruz
+                        captured_data["base_url"] = data["URL"].rsplit('/', 1)[0]
                 except:
                     pass
 
         page.on("response", handle_response)
 
-        print("\n🔍 PapazSports güncel adresi aranıyor...", flush=True)
-        active_domain = None
+        print("⏳ Siteye giriş yapılıyor ve Cloudflare bekleniyor...", flush=True)
+        try:
+            page.goto(domain, timeout=25000, wait_until='domcontentloaded')
+            page.wait_for_timeout(6000) # CF Bekleme
+            
+            # Eğer hala "Just a moment" sayfasındaysa biraz daha bekle
+            if "moment" in page.title().lower() or "cloudflare" in page.title().lower():
+                page.wait_for_timeout(8000)
+                
+        except Exception as e:
+            print("⚠️ Sayfa yüklenirken zaman aşımı oldu ama işleme devam ediliyor...", flush=True)
 
-        # Eskisi gibi çalışmayan yönlendiricilere takılmamak için TERS yönde (1015 -> 1000) tarıyoruz
-        for num in range(1015, 999, -1):
-            test_url = f"https://www.papazsports{num}.pro/"
-            print(f"Deneyiyor: {test_url:<35}", end="\r", flush=True)
-            try:
-                res = page.goto(test_url, timeout=12000)
-                # Sayfa yanıt verdiyse (CF 403 veya Başarılı 200) içeri girip bekleyelim
-                if res and res.status in[200, 403, 503]:
-                    page.wait_for_timeout(3000)
-                    title = page.title().lower()
-                    if "papaz" in title or "moment" in title or "cloudflare" in title:
-                        active_domain = page.url.rstrip('/')
-                        print(f"\n✅ Domain bulundu: {active_domain}", flush=True)
-                        break
-            except Exception:
-                pass
-
-        if not active_domain:
-            print("\n❌ Çalışan alan adı bulunamadı.")
-            browser.close()
-            return
-
-        print("⏳ Cloudflare koruması ve oynatıcının yüklenmesi bekleniyor (Maks 20 sn)...", flush=True)
-        
-        # Sitenin otomatik olarak ilk kanalı yüklemesini (ve auth.php'ye istek atmasını) bekliyoruz
-        for _ in range(20):
-            if captured_token:
-                break
+        # 10 saniye boyunca sitenin otomatik olarak kanalı açmasını bekle
+        print("⏳ Ağ trafiği dinleniyor, Token bekleniyor...", flush=True)
+        for _ in range(10):
+            if captured_data: break
             page.wait_for_timeout(1000)
 
-        # Eğer otomatik yüklemediyse, ekrandaki kanal butonuna (beIN 1) tıklayarak manuel tetikliyoruz
-        if not captured_token:
-            print("⚠️ Oynatıcı otomatik başlamadı, kanal listesinden tetikleniyor...", flush=True)
+        # Eğer otomatik açmadıysa, "beIN 1" butonuna insan gibi TIKLA! (CF engellemez)
+        if not captured_data:
+            print("⚠️ Otomatik istek alınamadı. Sitedeki beIN 1 butonuna tıklanıyor...", flush=True)
             try:
-                page.click('.channel-item', timeout=5000)
+                # Sitenin HTML kodunda gördüğümüz kanal butonu
+                page.locator('.channel-item[data-source="100001"]').first.click(timeout=5000)
                 for _ in range(10):
-                    if captured_token: break
+                    if captured_data: break
                     page.wait_for_timeout(1000)
             except:
                 pass
 
-        if not captured_token:
-            print("❌ Oynatıcıdan token çalınamadı. Cloudflare geçilememiş olabilir.", flush=True)
+        if not captured_data:
+            print("❌ Site yayınlara erişim vermedi veya Cloudflare ekranında kalındı.", flush=True)
             browser.close()
             return
 
-        print(f"\n🎯 BAŞARILI! Global Token Havada Yakalandı: {captured_token}", flush=True)
+        token = captured_data["token"]
+        base_url = captured_data["base_url"]
+        print(f"✅ Sitenin Kendi İsteklerinden Token Yakalandı: {token[:10]}...", flush=True)
 
         vip_channels = {
             "100001": ("beIN 1", "BeinSports1.tr"),
@@ -129,24 +133,19 @@ def main():
         os.makedirs(output_dir, exist_ok=True)
         global_playlist = ["#EXTM3U"]
 
-        print("🚀 URL'ler tek bir Token üzerinden otomatik oluşturuluyor...", flush=True)
+        print("🚀 Yayınlar oluşturuluyor...", flush=True)
 
-        # Ağ trafiğini meşgul edip banlanmak yerine, yakaladığımız 1 token ile BÜTÜN kanalları matematikle üretiyoruz!
         for channel_id, (name, tvg_id) in vip_channels.items():
-            print(f"📡 {name:<18} ✅")
-            
-            # Kanal URLsini kendimiz oluşturuyoruz (Örn: https://cdn.../1777.../100002.js)
-            stream_url = f"{captured_cdn_base}/{channel_id}.js"
-            
-            # Ağ loglarında (OPTIONS/GET isteklerinde) istenen Header bilgileri
-            pipe_headers = f"usertoken={captured_token}&pl=PapazSports&Origin={active_domain}&Referer={active_domain}/"
+            # Yakaladığımız tek token ile tüm kanalların linkini kendimiz oluşturuyoruz
+            stream_url = f"{base_url}/{channel_id}.js"
+            pipe_headers = f"usertoken={token}&pl=PapazSports&Origin={domain}&Referer={domain}/"
             final_link = f"{stream_url}|{pipe_headers}"
 
             content =[
                 "#EXTM3U",
                 f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}',
                 f"#EXTVLCOPT:http-user-agent={USER_AGENT}",
-                f"#EXTVLCOPT:http-referrer={active_domain}/",
+                f"#EXTVLCOPT:http-referrer={domain}/",
                 final_link
             ]
 
@@ -155,9 +154,10 @@ def main():
                 f.write("\n".join(content))
 
             global_playlist.extend(content[1:])
+            print(f"📡 Eklendi: {name}", flush=True)
 
         for key, (name, tvg_id, url) in direct_channels.items():
-            print(f"📡 {name:<18} (Şifresiz) ✅")
+            print(f"📡 Eklendi: {name} (Şifresiz)", flush=True)
             content =[
                 "#EXTM3U",
                 f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}',
@@ -173,7 +173,7 @@ def main():
             f.write("\n".join(global_playlist))
 
         browser.close()
-        print("\n🎉 İŞLEM BİTTİ! Tüm kanallar banlanma riski olmadan, 1 saniyede dosyaya döküldü.", flush=True)
+        print("\n🎉 İşlem bitti. Tüm m3u8 dosyaları başarıyla kaydedildi.", flush=True)
 
 if __name__ == "__main__":
     main()
