@@ -1,179 +1,135 @@
-import re
 import os
-from playwright.sync_api import sync_playwright
+import re
+import requests
+import json
 
-# --- Ayarlar ---
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+# SENİN KURDUĞUN EFSANE CLOUDFLARE WORKER ADRESİ
+WORKER_URL = "https://pz.hypercors.workers.dev"
 
-def find_working_domain(context):
-    print("\n🔍 PapazSports yönlendiricileri test ediliyor...", flush=True)
-    test_urls =["https://www.papazsports1000.pro/", "https://www.papazsports1005.pro/"]
-    for num in range(1001, 1020):
-        if num != 1005:
-            test_urls.append(f"https://www.papazsports{num}.pro/")
-            
-    for test_url in test_urls:
+def get_working_domain():
+    print(f"\n🔍 Cloudflare Worker üzerinden güncel PapazSports adresi aranıyor...", flush=True)
+    
+    # 1. Aşama: Worker üzerinden ana domaini bulma 
+    # (Worker 1000 numarasına girip yönlendirmeyi takip edip güncel adresi dönecek)
+    domain = None
+    try:
+        print("Deneyiyor: https://www.papazsports1000.pro/", flush=True)
+        api_url = f"{WORKER_URL}?url=https://www.papazsports1000.pro/"
+        res = requests.get(api_url, timeout=15)
+        
+        # JS kodumuz başarılı yönlendirmede URL'yi metin olarak dönüyor
+        if res.status_code == 200 and "papazsports" in res.text:
+            domain = res.text.strip().rstrip('/')
+            print(f"🎯 Worker Yönlendirmeyi Şipşak Buldu: {domain}", flush=True)
+            return domain
+    except Exception as e:
+        print(f"⚠️ 1000.pro'ya ulaşılamadı, alternatifler taranıyor...", flush=True)
+
+    # Eğer 1000 çalışmazsa yedek tarama (Geriye doğru tarayarak en günceli bulur)
+    for num in range(1030, 999, -1):
+        test_url = f"https://www.papazsports{num}.pro/"
         print(f"Deneyiyor: {test_url:<35}", end="\r", flush=True)
         try:
-            res = context.request.get(test_url, timeout=5000)
-            if res.status in [200, 403, 503]:
-                final_url = res.url.rstrip('/')
-                print(f"\n🎯 Yönlendirme Tamamlandı! Güncel Adres: {final_url}", flush=True)
-                return final_url
+            api_url = f"{WORKER_URL}?url={test_url}"
+            res = requests.get(api_url, timeout=10)
+            if res.status_code == 200 and "papazsports" in res.text:
+                domain = res.text.strip().rstrip('/')
+                print(f"\n🎯 Güncel Adres Tespit Edildi: {domain}", flush=True)
+                return domain
         except Exception:
             pass
+            
     return None
 
 def main():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
-        )
-        context = browser.new_context(
-            user_agent=USER_AGENT,
-            viewport={"width": 1280, "height": 720}
-        )
+    domain = get_working_domain()
+    
+    if not domain:
+        print("\n❌ Maalesef domain bulunamadı veya Worker yanıt vermedi.", flush=True)
+        return
 
-        domain = find_working_domain(context)
-        if not domain:
-            print("\n❌ Çalışan ana domain bulunamadı.", flush=True)
-            return
+    vip_channels = {
+        "100001": ("beIN 1", "BeinSports1.tr"), "100002": ("beIN 2", "BeinSports2.tr"),
+        "100003": ("beIN 3", "BeinSports3.tr"), "100004": ("beIN 4", "BeinSports4.tr"),
+        "100005": ("beIN 5", "BeinSports5.tr"), "100006": ("beIN Max 1", "BeinMax1.tr"),
+        "100007": ("beIN Max 2", "BeinMax2.tr"), "100010": ("S-Sport 1", "SSport1.tr"),
+        "100011": ("S-Sport 2", "SSport2.tr"), "100021": ("TiViBUSPOR 1", "TivibuSpor1.tr"),
+        "100022": ("TiViBUSPOR 2", "TivibuSpor2.tr"), "100023": ("TiViBUSPOR 3", "TivibuSpor3.tr"),
+        "100024": ("TiViBUSPOR 4", "TivibuSpor4.tr"), "100030": ("SMARTSPOR 1", "SmartSpor1.tr"),
+        "100031": ("SMARTSPOR 2", "SmartSpor2.tr"), "100051": ("TV 8.5", "TV85.tr"),
+        "100052": ("A Spor", "ASpor.tr"), "100053": ("NBA TV", "NBATV.tr"),
+        "100056": ("EUROSPORT 1", "Eurosport1.tr"), "100057": ("EUROSPORT 2", "Eurosport2.tr")
+    }
 
-        page = context.new_page()
-        captured_data = {}
+    direct_channels = {
+        "TRT_1": ("TRT 1", "TRT1.tr", "https://tv-trt1.medya.trt.com.tr/master.m3u8"),
+        "TRT_2": ("TRT 2", "TRT2.tr", "https://tv-trt2.medya.trt.com.tr/master.m3u8"),
+        "TRT_SPOR": ("TRT Spor", "TRTSpor.tr", "https://tv-trtspor1.medya.trt.com.tr/master.m3u8"),
+        "TRT_YILDIZ": ("TRT Yıldız", "TRTSporYildiz.tr", "https://tv-trtspor2.medya.trt.com.tr/master.m3u8")
+    }
 
-        # SİTEYİ DİNLİYORUZ: Site auth.php'ye bağlandığı an şifreyi çalacağız
-        def handle_response(response):
-            if "auth.php" in response.url and response.request.method == "POST":
-                try:
-                    data = response.json()
-                    if "TOKEN" in data and "URL" in data:
-                        captured_data["token"] = data["TOKEN"]
-                        captured_data["base_url"] = data["URL"].rsplit('/', 1)[0]
-                except:
-                    pass
+    output_dir = "kanallar"
+    os.makedirs(output_dir, exist_ok=True)
+    global_playlist = ["#EXTM3U"]
 
-        page.on("response", handle_response)
+    print(f"\n🚀 Worker üzerinden {domain} API'sine bağlanılıyor. Linkler çekiliyor...", flush=True)
 
-        print("⏳ Siteye giriş yapılıyor...", flush=True)
+    for channel_id, (name, tvg_id) in vip_channels.items():
+        print(f"📡 Çekiliyor: {name:<18}", end=" ", flush=True)
         try:
-            page.goto(domain, timeout=20000, wait_until='domcontentloaded')
-            page.wait_for_timeout(3000)
+            # Sitenin auth.php adresini Worker'a "POST Et" emriyle yolluyoruz
+            api_url = f"{WORKER_URL}?url={domain}/auth.php"
             
-            # CLOUDFLARE FİZİKSEL TIKLAMA BOTU
-            for _ in range(5):
-                title = page.title().lower()
-                if "moment" in title or "cloudflare" in title or "attention" in title:
-                    print("🛡️ Cloudflare 'İnsan mısınız?' testi saptandı! Otomatik tıklanıyor...", flush=True)
-                    try:
-                        # Sayfanın ortasındaki CF kutucuğuna fareyle tıklar
-                        page.mouse.click(x=300, y=300)
-                        page.frame_locator("iframe").first.locator("body").click(timeout=2000)
-                    except:
-                        pass
-                    page.wait_for_timeout(4000) # Kutucuk geçişi için bekle
-                else:
-                    break
+            # Worker bizim yerimize arka planda PapazSports'a sahte (spoof) headerlar ile istek atacak
+            res = requests.post(api_url, data={"channel": channel_id}, timeout=15)
+            
+            if res.status_code == 200:
+                try:
+                    data = res.json()
+                    stream_url = data.get("URL")
+                    token = data.get("TOKEN")
+                    
+                    if stream_url and token:
+                        # Oynatıcı Referansları (Headers)
+                        pipe_headers = f"usertoken={token}&pl=PapazSports&Origin={domain}&Referer={domain}/"
+                        final_link = f"{stream_url}|{pipe_headers}"
+
+                        content =[
+                            "#EXTM3U",
+                            f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}',
+                            final_link
+                        ]
+                        
+                        clean_name = name.replace(" ", "_").replace(".", "").replace("-", "_")
+                        with open(os.path.join(output_dir, f"{clean_name}.m3u8"), "w", encoding="utf-8") as f:
+                            f.write("\n".join(content))
+
+                        global_playlist.extend(content[1:])
+                        print("✅", flush=True)
+                    else:
+                        print("❌ (Gelen JSON'da URL veya Token Yok)", flush=True)
+                except Exception as e:
+                    print(f"❌ (Worker'dan dönen veri JSON değil: CF Engeli Olabilir)", flush=True)
+            else:
+                print(f"❌ (Sunucu Hatası: {res.status_code})", flush=True)
         except Exception as e:
-            print(f"⚠️ Sayfa yüklenirken gecikme oldu: {e}", flush=True)
+            print("⚠️ Zaman Aşımı", flush=True)
 
-        print("⏳ Ağ trafiği dinleniyor, Token bekleniyor...", flush=True)
-        for _ in range(5):
-            if captured_data: break
-            page.wait_for_timeout(1000)
+    # TRT Şifresiz Kanallar
+    for key, (name, tvg_id, url) in direct_channels.items():
+        print(f"📡 Ekleniyor: {name:<18} (Şifresiz) ✅", flush=True)
+        content =[
+            "#EXTM3U", f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}', url
+        ]
+        clean_name = name.replace(" ", "_").replace(".", "").replace("-", "_")
+        with open(os.path.join(output_dir, f"{clean_name}.m3u8"), "w", encoding="utf-8") as f:
+            f.write("\n".join(content))
+        global_playlist.extend(content[1:])
 
-        # Otomatik bağlantı kurulmadıysa biz manuel fetch komutu yolluyoruz
-        if not captured_data:
-            print("⚠️ Otomatik istek gelmedi. Javascript ile site içinden tetikleniyor...", flush=True)
-            try:
-                trigger_script = """
-                fetch('/auth.php', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest'},
-                    body: 'channel=100001'
-                });
-                """
-                page.evaluate(trigger_script)
-                for _ in range(5):
-                    if captured_data: break
-                    page.wait_for_timeout(1000)
-            except:
-                pass
+    with open("playlist.m3u", "w", encoding="utf-8") as f:
+        f.write("\n".join(global_playlist))
 
-        if not captured_data:
-            print("❌ Oynatıcı token veremedi. GitHub sunucusu engellenmiş olabilir.", flush=True)
-            print("\n🔍 GİTHUB'IN GÖRDÜĞÜ SİTE (Hata Ayıklama İçin):", flush=True)
-            print(page.content()[:800], flush=True) # HTML kodunu ekrana basar, bana yollarsın!
-            browser.close()
-            return
-
-        token = captured_data["token"]
-        base_url = captured_data["base_url"]
-        print(f"✅ Sitenin Kendi İsteklerinden Token Yakalandı: {token[:10]}...", flush=True)
-
-        vip_channels = {
-            "100001": ("beIN 1", "BeinSports1.tr"), "100002": ("beIN 2", "BeinSports2.tr"),
-            "100003": ("beIN 3", "BeinSports3.tr"), "100004": ("beIN 4", "BeinSports4.tr"),
-            "100005": ("beIN 5", "BeinSports5.tr"), "100006": ("beIN Max 1", "BeinMax1.tr"),
-            "100007": ("beIN Max 2", "BeinMax2.tr"), "100010": ("S-Sport 1", "SSport1.tr"),
-            "100011": ("S-Sport 2", "SSport2.tr"), "100021": ("TiViBUSPOR 1", "TivibuSpor1.tr"),
-            "100022": ("TiViBUSPOR 2", "TivibuSpor2.tr"), "100023": ("TiViBUSPOR 3", "TivibuSpor3.tr"),
-            "100024": ("TiViBUSPOR 4", "TivibuSpor4.tr"), "100030": ("SMARTSPOR 1", "SmartSpor1.tr"),
-            "100031": ("SMARTSPOR 2", "SmartSpor2.tr"), "100051": ("TV 8.5", "TV85.tr"),
-            "100052": ("A Spor", "ASpor.tr"), "100053": ("NBA TV", "NBATV.tr"),
-            "100056": ("EUROSPORT 1", "Eurosport1.tr"), "100057": ("EUROSPORT 2", "Eurosport2.tr")
-        }
-
-        direct_channels = {
-            "TRT_1": ("TRT 1", "TRT1.tr", "https://tv-trt1.medya.trt.com.tr/master.m3u8"),
-            "TRT_2": ("TRT 2", "TRT2.tr", "https://tv-trt2.medya.trt.com.tr/master.m3u8"),
-            "TRT_SPOR": ("TRT Spor", "TRTSpor.tr", "https://tv-trtspor1.medya.trt.com.tr/master.m3u8"),
-            "TRT_YILDIZ": ("TRT Yıldız", "TRTSporYildiz.tr", "https://tv-trtspor2.medya.trt.com.tr/master.m3u8")
-        }
-
-        output_dir = "kanallar"
-        os.makedirs(output_dir, exist_ok=True)
-        global_playlist = ["#EXTM3U"]
-
-        print("🚀 Yayınlar oluşturuluyor...", flush=True)
-
-        for channel_id, (name, tvg_id) in vip_channels.items():
-            stream_url = f"{base_url}/{channel_id}.js"
-            pipe_headers = f"usertoken={token}&pl=PapazSports&Origin={domain}&Referer={domain}/"
-            final_link = f"{stream_url}|{pipe_headers}"
-
-            content =[
-                "#EXTM3U",
-                f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}',
-                f"#EXTVLCOPT:http-user-agent={USER_AGENT}",
-                f"#EXTVLCOPT:http-referrer={domain}/",
-                final_link
-            ]
-
-            clean_name = name.replace(" ", "_").replace(".", "").replace("-", "_")
-            with open(os.path.join(output_dir, f"{clean_name}.m3u8"), "w", encoding="utf-8") as f:
-                f.write("\n".join(content))
-
-            global_playlist.extend(content[1:])
-            print(f"📡 Eklendi: {name}", flush=True)
-
-        for key, (name, tvg_id, url) in direct_channels.items():
-            print(f"📡 Eklendi: {name} (Şifresiz)", flush=True)
-            content =[
-                "#EXTM3U", f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}',
-                f"#EXTVLCOPT:http-user-agent={USER_AGENT}", url
-            ]
-            clean_name = name.replace(" ", "_").replace(".", "").replace("-", "_")
-            with open(os.path.join(output_dir, f"{clean_name}.m3u8"), "w", encoding="utf-8") as f:
-                f.write("\n".join(content))
-            global_playlist.extend(content[1:])
-
-        with open("playlist.m3u", "w", encoding="utf-8") as f:
-            f.write("\n".join(global_playlist))
-
-        browser.close()
-        print("\n🎉 İşlem bitti. Tüm m3u8 dosyaları başarıyla kaydedildi.", flush=True)
+    print("\n🎉 İşlem Bitti! Tüm yayınlar Worker Proxy sayesinde milisaniyeler içinde çekildi.", flush=True)
 
 if __name__ == "__main__":
     main()
