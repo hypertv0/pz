@@ -20,7 +20,7 @@ jobs:
         run: pip install curl_cffi
       - name: Botu Çalıştır
         run: python main.py
-      - name: Dosyaları Pushla
+      - name: Dosyaları Kaydet
         run: |
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "action@github.com"
