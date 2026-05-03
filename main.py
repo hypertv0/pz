@@ -1,13 +1,11 @@
 import re
 import os
-import time
 from playwright.sync_api import sync_playwright
 
 # --- Ayarlar ---
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
 
 def find_working_domain(context):
-    # Senin loglarda çalışan BİREBİR aynı mantık. Dokunulmadı!
     print("\n🔍 PapazSports yönlendiricileri test ediliyor...", flush=True)
     test_urls =["https://www.papazsports1000.pro/", "https://www.papazsports1005.pro/"]
     for num in range(1001, 1020):
@@ -30,7 +28,7 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=["--disable-blink-features=AutomationControlled"]
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
         )
         context = browser.new_context(
             user_agent=USER_AGENT,
@@ -43,55 +41,70 @@ def main():
             return
 
         page = context.new_page()
-        
         captured_data = {}
 
-        # SİTEYİ DİNLİYORUZ: Site kendi kendine auth.php isteği atarsa havada yakala
+        # SİTEYİ DİNLİYORUZ: Site auth.php'ye bağlandığı an şifreyi çalacağız
         def handle_response(response):
             if "auth.php" in response.url and response.request.method == "POST":
                 try:
                     data = response.json()
                     if "TOKEN" in data and "URL" in data:
                         captured_data["token"] = data["TOKEN"]
-                        # https://cdn.../17777.../100001.js kısmından 100001.js'yi atıyoruz
                         captured_data["base_url"] = data["URL"].rsplit('/', 1)[0]
                 except:
                     pass
 
         page.on("response", handle_response)
 
-        print("⏳ Siteye giriş yapılıyor ve Cloudflare bekleniyor...", flush=True)
+        print("⏳ Siteye giriş yapılıyor...", flush=True)
         try:
-            page.goto(domain, timeout=25000, wait_until='domcontentloaded')
-            page.wait_for_timeout(6000) # CF Bekleme
+            page.goto(domain, timeout=20000, wait_until='domcontentloaded')
+            page.wait_for_timeout(3000)
             
-            # Eğer hala "Just a moment" sayfasındaysa biraz daha bekle
-            if "moment" in page.title().lower() or "cloudflare" in page.title().lower():
-                page.wait_for_timeout(8000)
-                
+            # CLOUDFLARE FİZİKSEL TIKLAMA BOTU
+            for _ in range(5):
+                title = page.title().lower()
+                if "moment" in title or "cloudflare" in title or "attention" in title:
+                    print("🛡️ Cloudflare 'İnsan mısınız?' testi saptandı! Otomatik tıklanıyor...", flush=True)
+                    try:
+                        # Sayfanın ortasındaki CF kutucuğuna fareyle tıklar
+                        page.mouse.click(x=300, y=300)
+                        page.frame_locator("iframe").first.locator("body").click(timeout=2000)
+                    except:
+                        pass
+                    page.wait_for_timeout(4000) # Kutucuk geçişi için bekle
+                else:
+                    break
         except Exception as e:
-            print("⚠️ Sayfa yüklenirken zaman aşımı oldu ama işleme devam ediliyor...", flush=True)
+            print(f"⚠️ Sayfa yüklenirken gecikme oldu: {e}", flush=True)
 
-        # 10 saniye boyunca sitenin otomatik olarak kanalı açmasını bekle
         print("⏳ Ağ trafiği dinleniyor, Token bekleniyor...", flush=True)
-        for _ in range(10):
+        for _ in range(5):
             if captured_data: break
             page.wait_for_timeout(1000)
 
-        # Eğer otomatik açmadıysa, "beIN 1" butonuna insan gibi TIKLA! (CF engellemez)
+        # Otomatik bağlantı kurulmadıysa biz manuel fetch komutu yolluyoruz
         if not captured_data:
-            print("⚠️ Otomatik istek alınamadı. Sitedeki beIN 1 butonuna tıklanıyor...", flush=True)
+            print("⚠️ Otomatik istek gelmedi. Javascript ile site içinden tetikleniyor...", flush=True)
             try:
-                # Sitenin HTML kodunda gördüğümüz kanal butonu
-                page.locator('.channel-item[data-source="100001"]').first.click(timeout=5000)
-                for _ in range(10):
+                trigger_script = """
+                fetch('/auth.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest'},
+                    body: 'channel=100001'
+                });
+                """
+                page.evaluate(trigger_script)
+                for _ in range(5):
                     if captured_data: break
                     page.wait_for_timeout(1000)
             except:
                 pass
 
         if not captured_data:
-            print("❌ Site yayınlara erişim vermedi veya Cloudflare ekranında kalındı.", flush=True)
+            print("❌ Oynatıcı token veremedi. GitHub sunucusu engellenmiş olabilir.", flush=True)
+            print("\n🔍 GİTHUB'IN GÖRDÜĞÜ SİTE (Hata Ayıklama İçin):", flush=True)
+            print(page.content()[:800], flush=True) # HTML kodunu ekrana basar, bana yollarsın!
             browser.close()
             return
 
@@ -100,26 +113,16 @@ def main():
         print(f"✅ Sitenin Kendi İsteklerinden Token Yakalandı: {token[:10]}...", flush=True)
 
         vip_channels = {
-            "100001": ("beIN 1", "BeinSports1.tr"),
-            "100002": ("beIN 2", "BeinSports2.tr"),
-            "100003": ("beIN 3", "BeinSports3.tr"),
-            "100004": ("beIN 4", "BeinSports4.tr"),
-            "100005": ("beIN 5", "BeinSports5.tr"),
-            "100006": ("beIN Max 1", "BeinMax1.tr"),
-            "100007": ("beIN Max 2", "BeinMax2.tr"),
-            "100010": ("S-Sport 1", "SSport1.tr"),
-            "100011": ("S-Sport 2", "SSport2.tr"),
-            "100021": ("TiViBUSPOR 1", "TivibuSpor1.tr"),
-            "100022": ("TiViBUSPOR 2", "TivibuSpor2.tr"),
-            "100023": ("TiViBUSPOR 3", "TivibuSpor3.tr"),
-            "100024": ("TiViBUSPOR 4", "TivibuSpor4.tr"),
-            "100030": ("SMARTSPOR 1", "SmartSpor1.tr"),
-            "100031": ("SMARTSPOR 2", "SmartSpor2.tr"),
-            "100051": ("TV 8.5", "TV85.tr"),
-            "100052": ("A Spor", "ASpor.tr"),
-            "100053": ("NBA TV", "NBATV.tr"),
-            "100056": ("EUROSPORT 1", "Eurosport1.tr"),
-            "100057": ("EUROSPORT 2", "Eurosport2.tr")
+            "100001": ("beIN 1", "BeinSports1.tr"), "100002": ("beIN 2", "BeinSports2.tr"),
+            "100003": ("beIN 3", "BeinSports3.tr"), "100004": ("beIN 4", "BeinSports4.tr"),
+            "100005": ("beIN 5", "BeinSports5.tr"), "100006": ("beIN Max 1", "BeinMax1.tr"),
+            "100007": ("beIN Max 2", "BeinMax2.tr"), "100010": ("S-Sport 1", "SSport1.tr"),
+            "100011": ("S-Sport 2", "SSport2.tr"), "100021": ("TiViBUSPOR 1", "TivibuSpor1.tr"),
+            "100022": ("TiViBUSPOR 2", "TivibuSpor2.tr"), "100023": ("TiViBUSPOR 3", "TivibuSpor3.tr"),
+            "100024": ("TiViBUSPOR 4", "TivibuSpor4.tr"), "100030": ("SMARTSPOR 1", "SmartSpor1.tr"),
+            "100031": ("SMARTSPOR 2", "SmartSpor2.tr"), "100051": ("TV 8.5", "TV85.tr"),
+            "100052": ("A Spor", "ASpor.tr"), "100053": ("NBA TV", "NBATV.tr"),
+            "100056": ("EUROSPORT 1", "Eurosport1.tr"), "100057": ("EUROSPORT 2", "Eurosport2.tr")
         }
 
         direct_channels = {
@@ -136,7 +139,6 @@ def main():
         print("🚀 Yayınlar oluşturuluyor...", flush=True)
 
         for channel_id, (name, tvg_id) in vip_channels.items():
-            # Yakaladığımız tek token ile tüm kanalların linkini kendimiz oluşturuyoruz
             stream_url = f"{base_url}/{channel_id}.js"
             pipe_headers = f"usertoken={token}&pl=PapazSports&Origin={domain}&Referer={domain}/"
             final_link = f"{stream_url}|{pipe_headers}"
@@ -159,10 +161,8 @@ def main():
         for key, (name, tvg_id, url) in direct_channels.items():
             print(f"📡 Eklendi: {name} (Şifresiz)", flush=True)
             content =[
-                "#EXTM3U",
-                f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}',
-                f"#EXTVLCOPT:http-user-agent={USER_AGENT}",
-                url
+                "#EXTM3U", f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{name}",{name}',
+                f"#EXTVLCOPT:http-user-agent={USER_AGENT}", url
             ]
             clean_name = name.replace(" ", "_").replace(".", "").replace("-", "_")
             with open(os.path.join(output_dir, f"{clean_name}.m3u8"), "w", encoding="utf-8") as f:
