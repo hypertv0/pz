@@ -2,20 +2,19 @@ import os
 import re
 import requests
 from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 def get_domain():
     print("🔍 Gizli API'den PapazSports güncel adresi çekiliyor...", flush=True)
     try:
-        # Adamların kendi domain listesi API'si!
+        # Adamların kendi HTML kodunda bulduğumuz Domain API'si!
         res = requests.get("https://ahatm12od.top/domain_list.json", timeout=10)
         if res.status_code == 200:
             data = res.json()
             for key, value in data.items():
-                if "papaz" in value.lower():
-                    # Formatı düzeltiyoruz
+                if "papaz" in str(value).lower():
+                    # Formatı http:// formuna getiriyoruz
                     url = f"https://www.{value}/" if not value.startswith("http") else value
                     if not url.endswith('/'): url += '/'
                     print(f"🎯 Hedef Adres Anında Bulundu: {url}", flush=True)
@@ -29,7 +28,7 @@ def get_domain():
         print(f"Deneniyor: {test:<35}", end="\r", flush=True)
         try:
             r = requests.get(test, timeout=3)
-            if r.status_code in [200, 403, 503]:
+            if r.status_code in[200, 403, 503]:
                 print(f"\n✅ Adres Bulundu: {test}", flush=True)
                 return test
         except:
@@ -59,8 +58,8 @@ def main():
         )
         page = context.new_page()
         
-        # Bot Gizleme Kalkanını Aktif Ediyoruz
-        stealth_sync(page)
+        # --- BOT GİZLEME KALKANI (Kütüphanesiz) ---
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         captured_token = None
         captured_base = None
@@ -88,8 +87,9 @@ def main():
             page.mouse.move(500, 500)
             page.wait_for_timeout(6000)
 
+            title = page.title().lower()
             # Ekranda hala Cloudflare varsa merkeze tıkla
-            if "moment" in page.title().lower() or "cloudflare" in page.title().lower():
+            if "moment" in title or "cloudflare" in title or "attention" in title:
                 print("🛡️ CF Turnstile çözülüyor...", flush=True)
                 page.mouse.click(640, 360)
                 page.wait_for_timeout(6000)
@@ -146,8 +146,8 @@ def main():
 
         print("🚀 URL'ler yakalanan tek bir Token üzerinden oluşturuluyor...", flush=True)
 
+        # Ağ loglarından gördüğümüz Referer bilgilerini atıyoruz
         for channel_id, (name, tvg_id) in vip_channels.items():
-            # Ana CDN urlsi ve token ile tüm kanalları kendimiz üretiyoruz
             stream_url = f"{captured_base}/{channel_id}.js"
             pipe_headers = f"usertoken={captured_token}&pl=PapazSports&Origin={domain.rstrip('/')}&Referer={domain}"
             final_link = f"{stream_url}|{pipe_headers}"
