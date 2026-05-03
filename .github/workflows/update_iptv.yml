@@ -17,10 +17,10 @@ jobs:
         with:
           python-version: '3.10'
           
-      - name: Gerekli Kütüphaneyi Kur
-        run: pip install requests
-          
-      - name: Botu Çalıştır (API Modu)
+      - name: Gerekli Paketleri Kur
+        run: pip install curl_cffi
+        
+      - name: Botu Çalıştır
         run: python main.py
         
       - name: Dosyaları GitHub'a Yükle
