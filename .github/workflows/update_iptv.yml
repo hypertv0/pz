@@ -13,19 +13,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      
       - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-      - name: Kurulum
-        run: |
-          pip install playwright
-          playwright install chromium
-      - name: Calistir
+          
+      - name: Gerekli Paketleri Kur
+        run: pip install requests
+        
+      - name: Botu Çalıştır (Linkleri Topla)
         run: python main.py
-      - name: Push
+        
+      - name: Dosyaları GitHub'a Yükle
         run: |
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "action@github.com"
           git add kanallar/* playlist.m3u
-          git commit -m "PapazSports Guncelleme" || echo "No changes"
+          git commit -m "PapazSports Otomatik Guncelleme" || echo "Degisiklik yok"
           git push
